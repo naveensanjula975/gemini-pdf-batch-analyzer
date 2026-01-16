@@ -6,10 +6,11 @@ Handles interaction with Google Gemini API for document analysis.
 
 import logging
 import time
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional
 
 from google import genai
 from google.genai import types
+from tqdm import tqdm
 
 from .config import AppConfig
 from .models import PdfDocument, PdfAnalysisResult
@@ -159,7 +160,7 @@ def analyze_document(
     Returns:
         Analysis result for the document
     """
-    logger.info(f"Analyzing: {doc.filename}")
+    logger.debug(f"Analyzing: {doc.filename}")
     
     # Handle empty documents
     if not doc.text.strip():
@@ -177,7 +178,7 @@ def analyze_document(
     text = doc.text
     if len(text) > config.max_chars_per_doc:
         text = text[:config.max_chars_per_doc]
-        logger.info(f"Truncated {doc.filename} to {config.max_chars_per_doc} characters")
+        logger.debug(f"Truncated {doc.filename} to {config.max_chars_per_doc} characters")
     
     # Build prompt
     prompt = ANALYSIS_PROMPT.format(document_text=text)
@@ -193,7 +194,7 @@ def analyze_document(
             
             if response.text:
                 result = _parse_response(response.text, doc.filename)
-                logger.info(f"Successfully analyzed: {doc.filename}")
+                logger.debug(f"Successfully analyzed: {doc.filename}")
                 return result
             else:
                 raise ValueError("Empty response from Gemini")
@@ -219,32 +220,65 @@ def analyze_document(
 def analyze_documents(
     client: genai.Client,
     documents: List[PdfDocument],
-    config: AppConfig
+    config: AppConfig,
+    cache: Optional[Dict[str, dict]] = None,
+    cache_callback: Optional[Callable[[PdfDocument, PdfAnalysisResult], None]] = None,
+    show_progress: bool = True
 ) -> List[PdfAnalysisResult]:
     """
-    Analyze multiple documents.
+    Analyze multiple documents with optional caching.
     
     Args:
         client: Initialized Gemini client  
         documents: List of PDF documents to analyze
         config: Application configuration
+        cache: Optional cache dictionary for skipping unchanged files
+        cache_callback: Optional callback to update cache after each analysis
+        show_progress: Whether to show a progress bar
         
     Returns:
         List of analysis results
     """
+    from .cache import get_cached_result, cache_result
+    
     results = []
     total = len(documents)
+    cached_count = 0
     
-    for i, doc in enumerate(documents, 1):
-        logger.info(f"Processing {i}/{total}: {doc.filename}")
-        result = analyze_document(client, doc, config)
-        results.append(result)
+    # Create progress bar
+    iterator = tqdm(
+        documents,
+        desc="Analyzing PDFs",
+        unit="doc",
+        disable=not show_progress
+    )
+    
+    for doc in iterator:
+        iterator.set_postfix_str(doc.filename[:25])
         
-        # Small delay between documents to avoid rate limiting
-        if i < total:
+        # Check cache first
+        cached_result = None
+        if cache is not None:
+            cached_result = get_cached_result(cache, doc)
+        
+        if cached_result is not None:
+            results.append(cached_result)
+            cached_count += 1
+            logger.debug(f"Using cached result for: {doc.filename}")
+        else:
+            result = analyze_document(client, doc, config)
+            results.append(result)
+            
+            # Update cache
+            if cache is not None:
+                cache_result(cache, doc, result)
+            if cache_callback:
+                cache_callback(doc, result)
+            
+            # Small delay between API calls to avoid rate limiting
             time.sleep(0.5)
     
     successful = sum(1 for r in results if r.is_successful)
-    logger.info(f"Completed analysis: {successful}/{total} successful")
+    logger.info(f"Completed: {successful}/{total} successful, {cached_count} from cache")
     
     return results

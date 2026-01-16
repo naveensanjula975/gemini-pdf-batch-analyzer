@@ -10,14 +10,20 @@ import sys
 from pathlib import Path
 
 from .analyzer import analyze_documents, create_client
+from .cache import load_cache, save_cache, clear_cache
 from .config import load_config
 from .exporter import export_results
 from .pdf_loader import load_pdfs
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     """Configure logging for the application."""
-    level = logging.DEBUG if verbose else logging.INFO
+    if quiet:
+        level = logging.WARNING
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
     
     logging.basicConfig(
         level=level,
@@ -43,7 +49,9 @@ def create_parser() -> argparse.ArgumentParser:
 Examples:
   %(prog)s --input-dir data/input_pdfs --output-dir data/output
   %(prog)s --max-docs 10 --verbose
-  %(prog)s --model-name gemini-2.0-flash --format csv json
+  %(prog)s --filter "report*.pdf" --format csv excel
+  %(prog)s --no-cache  # Skip caching, re-analyze all files
+  %(prog)s --clear-cache  # Clear cached results
         """,
     )
     
@@ -72,11 +80,36 @@ Examples:
     )
     
     parser.add_argument(
+        "--filter", "-F",
+        type=str,
+        dest="filter_pattern",
+        help="Filter pattern for PDF filenames (glob/fnmatch syntax, e.g. 'report*.pdf')",
+    )
+    
+    parser.add_argument(
         "--format", "-f",
         nargs="+",
-        choices=["csv", "json", "jsonl"],
+        choices=["csv", "json", "jsonl", "excel"],
         default=["csv", "jsonl"],
         help="Output formats (default: csv jsonl)",
+    )
+    
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching, re-analyze all files",
+    )
+    
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear cached results and exit",
+    )
+    
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress bars",
     )
     
     parser.add_argument(
@@ -86,9 +119,15 @@ Examples:
     )
     
     parser.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress most output (only show warnings/errors)",
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version="%(prog)s 0.2.0",
     )
     
     return parser
@@ -105,7 +144,7 @@ def main() -> int:
     args = parser.parse_args()
     
     # Setup logging
-    setup_logging(args.verbose)
+    setup_logging(args.verbose, args.quiet)
     logger = logging.getLogger(__name__)
     
     try:
@@ -118,13 +157,29 @@ def main() -> int:
             max_docs=args.max_docs,
         )
         
+        # Handle clear-cache command
+        if args.clear_cache:
+            if clear_cache(config.input_dir):
+                logger.info("Cache cleared successfully")
+            else:
+                logger.info("No cache to clear")
+            return 0
+        
         logger.info(f"Input directory: {config.input_dir}")
         logger.info(f"Output directory: {config.output_dir}")
         logger.info(f"Model: {config.model_name}")
+        if args.filter_pattern:
+            logger.info(f"Filter pattern: {args.filter_pattern}")
         
         # Load PDFs
         logger.info("Loading PDF documents...")
-        documents = load_pdfs(config.input_dir, config.max_docs)
+        show_progress = not args.no_progress and not args.quiet
+        documents = load_pdfs(
+            config.input_dir,
+            config.max_docs,
+            filter_pattern=args.filter_pattern,
+            show_progress=show_progress
+        )
         
         if not documents:
             logger.warning("No PDF documents found in input directory")
@@ -132,13 +187,28 @@ def main() -> int:
         
         logger.info(f"Loaded {len(documents)} document(s)")
         
+        # Load cache (unless disabled)
+        cache = None
+        if not args.no_cache:
+            cache = load_cache(config.input_dir)
+        
         # Create Gemini client
         logger.info("Initializing Gemini client...")
         client = create_client(config.gemini_api_key)
         
         # Analyze documents
         logger.info("Starting analysis...")
-        results = analyze_documents(client, documents, config)
+        results = analyze_documents(
+            client,
+            documents,
+            config,
+            cache=cache,
+            show_progress=show_progress
+        )
+        
+        # Save cache
+        if cache is not None:
+            save_cache(config.input_dir, cache)
         
         # Export results
         logger.info("Exporting results...")

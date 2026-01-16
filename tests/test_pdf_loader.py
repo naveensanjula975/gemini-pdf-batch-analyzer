@@ -1,6 +1,5 @@
 """Tests for the PDF loader module."""
 
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -24,10 +23,9 @@ class TestListPdfFiles:
     
     def test_list_pdf_files_with_pdfs(self, tmp_path: Path) -> None:
         """Test listing PDFs when files exist."""
-        # Create dummy PDF files
         (tmp_path / "doc1.pdf").touch()
         (tmp_path / "doc2.pdf").touch()
-        (tmp_path / "other.txt").touch()  # Should be ignored
+        (tmp_path / "other.txt").touch()
         
         result = list_pdf_files(tmp_path)
         
@@ -36,6 +34,20 @@ class TestListPdfFiles:
         assert "doc1.pdf" in names
         assert "doc2.pdf" in names
         assert "other.txt" not in names
+    
+    def test_list_pdf_files_with_filter(self, tmp_path: Path) -> None:
+        """Test filtering PDFs by filename pattern."""
+        (tmp_path / "report_2024.pdf").touch()
+        (tmp_path / "report_2025.pdf").touch()
+        (tmp_path / "invoice_001.pdf").touch()
+        
+        result = list_pdf_files(tmp_path, filter_pattern="report*.pdf")
+        
+        assert len(result) == 2
+        names = [p.name for p in result]
+        assert "report_2024.pdf" in names
+        assert "report_2025.pdf" in names
+        assert "invoice_001.pdf" not in names
     
     def test_list_pdf_files_nonexistent_directory(self) -> None:
         """Test error when directory doesn't exist."""
@@ -57,7 +69,6 @@ class TestExtractText:
     @patch("gemini_pdf_analyzer.pdf_loader.PdfReader")
     def test_extract_text_success(self, mock_reader_class: MagicMock) -> None:
         """Test successful text extraction from PDF."""
-        # Setup mock
         mock_page1 = MagicMock()
         mock_page1.extract_text.return_value = "Page 1 content"
         mock_page2 = MagicMock()
@@ -101,14 +112,13 @@ class TestLoadPdfs:
         tmp_path: Path
     ) -> None:
         """Test successful loading of multiple PDFs."""
-        # Setup mocks
         mock_list.return_value = [
             tmp_path / "doc1.pdf",
             tmp_path / "doc2.pdf",
         ]
         mock_extract.return_value = ("Sample text content", 5)
         
-        result = load_pdfs(tmp_path)
+        result = load_pdfs(tmp_path, show_progress=False)
         
         assert len(result) == 2
         assert all(isinstance(doc, PdfDocument) for doc in result)
@@ -130,12 +140,28 @@ class TestLoadPdfs:
         ]
         mock_extract.return_value = ("Text", 1)
         
-        result = load_pdfs(tmp_path, max_docs=3)
+        result = load_pdfs(tmp_path, max_docs=3, show_progress=False)
         
         assert len(result) == 3
     
     @patch("gemini_pdf_analyzer.pdf_loader.extract_text")
-    @patch("gemini_pdf_analyzer.pdf_loader.list_pdf_files")  
+    @patch("gemini_pdf_analyzer.pdf_loader.list_pdf_files")
+    def test_load_pdfs_with_filter(
+        self,
+        mock_list: MagicMock,
+        mock_extract: MagicMock,
+        tmp_path: Path
+    ) -> None:
+        """Test filter pattern is passed to list_pdf_files."""
+        mock_list.return_value = [tmp_path / "report.pdf"]
+        mock_extract.return_value = ("Text", 1)
+        
+        load_pdfs(tmp_path, filter_pattern="report*.pdf", show_progress=False)
+        
+        mock_list.assert_called_once_with(tmp_path, "report*.pdf")
+    
+    @patch("gemini_pdf_analyzer.pdf_loader.extract_text")
+    @patch("gemini_pdf_analyzer.pdf_loader.list_pdf_files")
     def test_load_pdfs_handles_extraction_error(
         self,
         mock_list: MagicMock,
@@ -146,8 +172,7 @@ class TestLoadPdfs:
         mock_list.return_value = [tmp_path / "bad.pdf"]
         mock_extract.side_effect = Exception("Cannot read PDF")
         
-        result = load_pdfs(tmp_path)
+        result = load_pdfs(tmp_path, show_progress=False)
         
-        # Should still return a document entry, but with empty text
         assert len(result) == 1
         assert result[0].text == ""

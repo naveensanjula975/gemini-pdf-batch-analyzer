@@ -9,6 +9,8 @@ dependencies = [
     "pypdf",
     "pandas",
     "python-dotenv",
+    "tqdm",
+    "openpyxl",
 ]
 
 [project.optional-dependencies]

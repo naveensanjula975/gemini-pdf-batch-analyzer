@@ -8,6 +8,7 @@ import pytest
 
 from gemini_pdf_analyzer.exporter import (
     export_to_csv,
+    export_to_excel,
     export_to_json,
     export_results,
 )
@@ -175,13 +176,15 @@ class TestExportResults:
         output_files = export_results(
             sample_results,
             tmp_path,
-            formats=["csv", "jsonl"],
+            formats=["csv", "jsonl", "excel"],
         )
         
         assert "csv" in output_files
         assert "jsonl" in output_files
+        assert "excel" in output_files
         assert output_files["csv"].exists()
         assert output_files["jsonl"].exists()
+        assert output_files["excel"].exists()
     
     def test_export_default_formats(
         self,
@@ -206,3 +209,55 @@ class TestExportResults:
             rows = list(reader)
         
         assert len(rows) == 0
+
+
+class TestExportToExcel:
+    """Tests for export_to_excel function."""
+    
+    def test_export_creates_excel_file(
+        self,
+        sample_results: list[PdfAnalysisResult],
+        tmp_path: Path,
+    ) -> None:
+        """Test that Excel file is created."""
+        output_path = export_to_excel(
+            sample_results,
+            tmp_path,
+            filename="test_output.xlsx",
+        )
+        
+        assert output_path.exists()
+        assert output_path.suffix == ".xlsx"
+    
+    def test_export_excel_auto_filename(
+        self,
+        sample_results: list[PdfAnalysisResult],
+        tmp_path: Path,
+    ) -> None:
+        """Test auto-generated Excel filename."""
+        output_path = export_to_excel(sample_results, tmp_path)
+        
+        assert output_path.exists()
+        assert "analysis_results" in output_path.name
+        assert output_path.suffix == ".xlsx"
+    
+    def test_export_excel_content(
+        self,
+        sample_results: list[PdfAnalysisResult],
+        tmp_path: Path,
+    ) -> None:
+        """Test Excel file contains expected data."""
+        import pandas as pd
+        
+        output_path = export_to_excel(
+            sample_results,
+            tmp_path,
+            filename="test_output.xlsx",
+        )
+        
+        df = pd.read_excel(output_path)
+        
+        assert len(df) == 3
+        assert df.iloc[0]["filename"] == "doc1.pdf"
+        assert df.iloc[0]["summary"] == "Summary of document 1"
+

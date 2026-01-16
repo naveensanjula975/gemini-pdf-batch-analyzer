@@ -1,7 +1,7 @@
 """
 Export module for Gemini PDF Analyzer.
 
-Handles exporting analysis results to CSV and JSON formats.
+Handles exporting analysis results to CSV, JSON, and Excel formats.
 """
 
 import json
@@ -28,6 +28,17 @@ def _generate_filename(prefix: str, extension: str) -> str:
     return f"{prefix}_{timestamp}.{extension}"
 
 
+def _results_to_dataframe(results: List[PdfAnalysisResult]) -> pd.DataFrame:
+    """Convert results to a pandas DataFrame with proper column ordering."""
+    data = [result.to_dict() for result in results]
+    df = pd.DataFrame(data)
+    
+    # Reorder columns for readability
+    column_order = ["filename", "summary", "key_entities", "action_items", "keywords", "error"]
+    columns = [col for col in column_order if col in df.columns]
+    return df[columns]
+
+
 def export_to_csv(
     results: List[PdfAnalysisResult],
     output_dir: Path,
@@ -50,19 +61,54 @@ def export_to_csv(
         filename = _generate_filename("analysis_results", "csv")
     
     output_path = output_dir / filename
+    df = _results_to_dataframe(results)
     
-    # Convert to DataFrame
-    data = [result.to_dict() for result in results]
-    df = pd.DataFrame(data)
-    
-    # Reorder columns for readability
-    column_order = ["filename", "summary", "key_entities", "action_items", "keywords", "error"]
-    columns = [col for col in column_order if col in df.columns]
-    df = df[columns]
-    
-    # Export
     df.to_csv(output_path, index=False, encoding="utf-8")
     logger.info(f"Exported {len(results)} results to CSV: {output_path}")
+    
+    return output_path
+
+
+def export_to_excel(
+    results: List[PdfAnalysisResult],
+    output_dir: Path,
+    filename: str | None = None
+) -> Path:
+    """
+    Export analysis results to an Excel file (.xlsx).
+    
+    Args:
+        results: List of analysis results to export
+        output_dir: Directory to save the Excel file
+        filename: Optional custom filename (auto-generated if not provided)
+        
+    Returns:
+        Path to the created Excel file
+    """
+    _ensure_output_dir(output_dir)
+    
+    if not filename:
+        filename = _generate_filename("analysis_results", "xlsx")
+    
+    output_path = output_dir / filename
+    df = _results_to_dataframe(results)
+    
+    # Write to Excel with formatting
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Analysis Results")
+        
+        # Auto-adjust column widths
+        worksheet = writer.sheets["Analysis Results"]
+        for idx, col in enumerate(df.columns):
+            max_length = max(
+                df[col].astype(str).map(len).max(),
+                len(col)
+            )
+            # Cap at 50 chars for readability
+            adjusted_width = min(max_length + 2, 50)
+            worksheet.column_dimensions[chr(65 + idx)].width = adjusted_width
+    
+    logger.info(f"Exported {len(results)} results to Excel: {output_path}")
     
     return output_path
 
@@ -119,7 +165,7 @@ def export_results(
     Args:
         results: List of analysis results to export
         output_dir: Directory to save output files
-        formats: List of formats to export ("csv", "json", "jsonl")
+        formats: List of formats to export ("csv", "json", "jsonl", "excel")
                  Defaults to ["csv", "jsonl"]
                  
     Returns:
@@ -137,6 +183,8 @@ def export_results(
             output_files["json"] = export_to_json(results, output_dir, jsonl=False)
         elif fmt == "jsonl":
             output_files["jsonl"] = export_to_json(results, output_dir, jsonl=True)
+        elif fmt == "excel":
+            output_files["excel"] = export_to_excel(results, output_dir)
         else:
             logger.warning(f"Unknown export format: {fmt}")
     
